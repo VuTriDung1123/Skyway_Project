@@ -1,57 +1,84 @@
 // components/SkywaySimulation.tsx
 "use client";
 
-import React, { useRef, useMemo } from "react";
+import React, { useRef, useMemo, useState } from "react";
 import { Canvas, useFrame } from "@react-three/fiber";
-import { OrbitControls, Sky, Stars, PerspectiveCamera } from "@react-three/drei";
+import { OrbitControls, Sky, Stars, PerspectiveCamera, Environment } from "@react-three/drei";
 import { useControls, Leva } from "leva";
 import * as THREE from "three";
 
-// --- CẤU HÌNH ĐƯỜNG ĐUA (LOOP) ---
-// Tạo các điểm mốc để đường ray đi qua. 
-// Lưu ý: Điểm (0, 8, 30) là vị trí đặt Nhà Ga.
-const trackPoints = [
-  new THREE.Vector3(0, 8, 30),   // Điểm giữa Nhà ga
-  new THREE.Vector3(20, 8, 30),  // Ra khỏi ga
-  new THREE.Vector3(40, 8, 10),  // Cua phải
-  new THREE.Vector3(40, 8, -10),
-  new THREE.Vector3(20, 8, -30), // Vòng ra sau
-  new THREE.Vector3(-20, 8, -30),
-  new THREE.Vector3(-40, 8, -10),
-  new THREE.Vector3(-40, 8, 10), // Cua trái về lại
-  new THREE.Vector3(-20, 8, 30), // Chuẩn bị vào ga
-];
-
-// Tạo đường cong khép kín
-const trackCurve = new THREE.CatmullRomCurve3(trackPoints, true, 'catmullrom', 0.2);
-
-// 1. Component Đường ray (Rail)
-const Rail = () => {
-  const curveGeometry = useMemo(() => {
-    // Tạo hình ống bám theo đường cong
-    return new THREE.TubeGeometry(trackCurve, 300, 0.15, 8, true);
-  }, []);
+// --- 1. CẤU TRÚC GIÀN THÉP (TRUSS TRACK) ---
+// Tạo một đoạn giàn thép mẫu
+const TrussSegment = ({ position }: { position: [number, number, number] }) => {
+  const trussMaterial = new THREE.MeshStandardMaterial({ color: "#557788", metalness: 0.6, roughness: 0.2 });
+  const length = 10; // Độ dài mỗi đoạn
+  const height = 1.5; // Chiều cao giàn
+  const width = 1;    // Chiều rộng giàn
 
   return (
-    <mesh geometry={curveGeometry}>
-      <meshStandardMaterial color="#333" />
-    </mesh>
+    <group position={position}>
+      {/* Thanh chủ (Chord) trên và dưới */}
+      <mesh position={[0, height / 2, 0]} material={trussMaterial}><boxGeometry args={[width, 0.2, length]} /></mesh>
+      <mesh position={[0, -height / 2, 0]} material={trussMaterial}><boxGeometry args={[width, 0.2, length]} /></mesh>
+      
+      {/* Đường ray treo tàu (nằm dưới đáy) */}
+      <mesh position={[0, -height / 2 - 0.15, 0]} material={trussMaterial}>
+          <boxGeometry args={[0.3, 0.1, length]} />
+      </mesh>
+
+      {/* Các thanh chống đứng (Vertical posts) */}
+      {[-length / 2, 0, length / 2].map((z, i) => (
+        <React.Fragment key={i}>
+          <mesh position={[-width / 2 + 0.1, 0, z]} material={trussMaterial}><boxGeometry args={[0.2, height, 0.2]} /></mesh>
+          <mesh position={[width / 2 - 0.1, 0, z]} material={trussMaterial}><boxGeometry args={[0.2, height, 0.2]} /></mesh>
+        </React.Fragment>
+      ))}
+      
+      {/* Các thanh chéo (Diagonal braces) - Tạo hình ziczac */}
+      <mesh position={[width/2 - 0.1, 0, 0]} rotation={[Math.PI/4, 0, 0]} material={trussMaterial}><boxGeometry args={[0.15, height * 1.4, 0.15]} /></mesh>
+      <mesh position={[width/2 - 0.1, 0, 0]} rotation={[-Math.PI/4, 0, 0]} material={trussMaterial}><boxGeometry args={[0.15, height * 1.4, 0.15]} /></mesh>
+       <mesh position={[-width/2 + 0.1, 0, 0]} rotation={[Math.PI/4, 0, 0]} material={trussMaterial}><boxGeometry args={[0.15, height * 1.4, 0.15]} /></mesh>
+      <mesh position={[-width/2 + 0.1, 0, 0]} rotation={[-Math.PI/4, 0, 0]} material={trussMaterial}><boxGeometry args={[0.15, height * 1.4, 0.15]} /></mesh>
+    </group>
   );
 };
 
-// 2. Component Cột trụ (Pillars) - Tự động sinh ra tại các điểm uốn của đường ray
+// Tạo toàn bộ đường ray từ các đoạn giàn
+const FullTrack = () => {
+  // Tạo 20 đoạn, tổng chiều dài 200m
+  const segments = Array.from({ length: 20 }, (_, i) => (
+    <TrussSegment key={i} position={[0, 10, (i - 9.5) * 10]} />
+  ));
+  return <group>{segments}</group>;
+};
+
+
+// --- 2. CỘT ĐỠ DẠNG CHỮ T NGƯỢC (SUPPORT PILLARS) ---
 const Pillars = () => {
+  // Đặt trụ cách nhau 40m
+  const positions = [-80, -40, 0, 40, 80];
+  const pillarMaterial = new THREE.MeshStandardMaterial({ color: "#8899AA" });
+
   return (
     <>
-      {trackPoints.map((point, i) => (
-        <group key={i} position={[point.x, 4, point.z]}> {/* y=4 vì trụ cao 8m */}
-          <mesh>
-            <cylinderGeometry args={[0.3, 0.5, 8, 32]} />
-            <meshStandardMaterial color="#888" />
+      {positions.map((z, i) => (
+        <group key={i} position={[0, 0, z]}>
+          {/* Thân trụ chính (lệch sang một bên để không cản tàu) */}
+          <mesh position={[3, 5, 0]} material={pillarMaterial}>
+            <cylinderGeometry args={[0.6, 0.8, 10, 32]} />
           </mesh>
-          <mesh position={[0, -3.9, 0]}>
-             <cylinderGeometry args={[0.8, 1, 0.2, 32]} />
-             <meshStandardMaterial color="#555" />
+          {/* Đế trụ */}
+          <mesh position={[3, 0.2, 0]} material={pillarMaterial}>
+            <cylinderGeometry args={[1.2, 1.5, 0.4, 32]} />
+          </mesh>
+          
+          {/* Xà ngang (Cánh tay đòn) đỡ đường ray giàn */}
+          <mesh position={[0, 9.8, 0]} material={pillarMaterial}>
+              <boxGeometry args={[7, 0.8, 1.5]} />
+          </mesh>
+          {/* Khớp nối giữa xà ngang và giàn */}
+           <mesh position={[0, 10.2, 0]} material={pillarMaterial}>
+              <boxGeometry args={[1.2, 0.6, 1.2]} />
           </mesh>
         </group>
       ))}
@@ -59,135 +86,125 @@ const Pillars = () => {
   );
 };
 
-// 3. Component Nhà ga (Station) - Đặt tại vị trí (0, 8, 30)
-const Station = () => {
-  return (
-    <group position={[0, 8, 30]}>
-      {/* Sàn ga (Tàu sẽ lướt ngay trên mặt này) */}
-      <mesh position={[0, -0.6, 0]}>
-        <boxGeometry args={[12, 0.5, 12]} />
-        <meshStandardMaterial color="#505050" />
-      </mesh>
-      {/* Mái che */}
-      <mesh position={[0, 3.5, 0]}>
-         <boxGeometry args={[14, 0.2, 14]} />
-         <meshStandardMaterial color="#aaa" />
-      </mesh>
-       {/* Cột đỡ mái nhà ga */}
-       <mesh position={[-5, 1.5, 5]}><cylinderGeometry args={[0.2,0.2,4]} /><meshStandardMaterial color="#666"/></mesh>
-       <mesh position={[5, 1.5, 5]}><cylinderGeometry args={[0.2,0.2,4]} /><meshStandardMaterial color="#666"/></mesh>
-       <mesh position={[-5, 1.5, -5]}><cylinderGeometry args={[0.2,0.2,4]} /><meshStandardMaterial color="#666"/></mesh>
-       <mesh position={[5, 1.5, -5]}><cylinderGeometry args={[0.2,0.2,4]} /><meshStandardMaterial color="#666"/></mesh>
-    </group>
-  )
-}
 
-// 4. Component Các toà nhà (Trang trí)
-const Buildings = () => {
-  const buildings = useMemo(() => {
-    const configs = [
-        { pos: [-15, 0, 10], size: [5, 20, 5], color: '#A020F0' },
-        { pos: [15, 0, 5], size: [4, 25, 4], color: '#00FF7F' },
-        { pos: [25, 0, 15], size: [6, 18, 6], color: '#FFC0CB' },
-        { pos: [-20, 0, -10], size: [5, 15, 5], color: '#FF4500' },
-        { pos: [0, 0, -20], size: [8, 30, 8], color: '#4682B4' }, // Toà nhà chọc trời giữa map
-    ];
-    return configs.map((cfg, i) => (
-       <mesh key={i} position={[cfg.pos[0], cfg.size[1] / 2 - 0.1, cfg.pos[2]]}>
-          <boxGeometry args={cfg.size as [number, number, number]} />
-          <meshStandardMaterial color={cfg.color} />
-        </mesh>
-    ));
-  }, []);
-  return <group>{buildings}</group>;
-}
-
-// 5. Component uPod (Có Camera Buồng lái)
-const Upod = ({ speed, isMoving, cockpitView }: { speed: number, isMoving: boolean, cockpitView: boolean }) => {
+// --- 3. uPod TREO (HANGING uPod) ---
+const HangingUpod = ({ speed, isMoving, cockpitView, lookX, lookY }: any) => {
   const uPodRef = useRef<THREE.Group>(null);
-  const progress = useRef(0);
+  // Giới hạn di chuyển trong khoảng z từ -90 đến 90
+  const zPosition = useRef(0);
 
   useFrame((state, delta) => {
     if (uPodRef.current && isMoving) {
-      // Logic di chuyển
-      progress.current = (progress.current + (speed * delta) / 200) % 1; // Chia 200 vì đường dài hơn
-      const position = trackCurve.getPointAt(progress.current);
-      uPodRef.current.position.copy(position);
-      
-      const tangent = trackCurve.getTangentAt(progress.current).normalize();
-      uPodRef.current.lookAt(position.clone().add(tangent));
+        // Di chuyển qua lại
+        zPosition.current += speed * delta * 0.5 * Math.sign(Math.sin(state.clock.elapsedTime * 0.2));
+        // Giới hạn phạm vi
+        zPosition.current = Math.max(-90, Math.min(90, zPosition.current));
+
+        // Đặt vị trí: x=0, y=9 (treo dưới giàn cao 10), z thay đổi
+        uPodRef.current.position.set(0, 9, zPosition.current);
+        
+        // Xoay đầu xe theo hướng di chuyển
+        const direction = Math.sign(Math.sin(state.clock.elapsedTime * 0.2));
+        uPodRef.current.rotation.y = direction > 0 ? 0 : Math.PI;
     }
   });
 
   return (
     <group ref={uPodRef}>
-      {/* --- CAMERA BUỒNG LÁI (Gắn chặt vào xe) --- */}
       <PerspectiveCamera 
         makeDefault={cockpitView} 
-        position={[0, 0.5, 1.8]} // Ngồi trong xe nhìn ra trước
-        rotation={[0, Math.PI, 0]} // Xoay ngược lại vì lookAt của xe đang hướng về Z
-        fov={75}
-        near={0.1}
+        position={[0, 0, 1.8]} // Ngồi ở đầu xe
+        rotation={[lookY, lookX, 0]} 
+        fov={80} near={0.1}
       />
-      {/* Cần xoay camera 180 độ (Math.PI) nếu thấy đi lùi, hoặc chỉnh lại logic lookAt. 
-         Với CatmullRomCurve3 mặc định, thường ta nhìn về hướng tangent. 
-         Để đơn giản, ta đặt camera ngay mũi xe. */}
 
-      {/* Thân xe */}
-      <mesh position={[0, 0.2, 0]}>
-        <boxGeometry args={[2.2, 1.2, 2.5]} />
-        <meshStandardMaterial color="#00aaff" roughness={0.3} metalness={0.8} />
+      {/* Thân xe (Màu xanh ngọc giống ảnh) */}
+      <mesh position={[0, -0.8, 0]}> {/* Hạ thấp trọng tâm */}
+        <boxGeometry args={[2.2, 1.4, 3]} />
+        <meshStandardMaterial color="#00A896" roughness={0.2} metalness={0.4} />
       </mesh>
-      {/* Kính đen */}
-      <mesh position={[0, 0.4, 1.26]}>
-        <planeGeometry args={[2, 0.6]} />
-        <meshStandardMaterial color="black" roughness={0.1} />
+      {/* Kính trước */}
+      <mesh position={[0, -0.6, 1.51]}>
+        <planeGeometry args={[2, 0.8]} />
+        <meshStandardMaterial color="#111" roughness={0} metalness={1} opacity={0.9} transparent />
       </mesh>
-      {/* Móc treo */}
-      <mesh position={[0, 0.8, 0]}>
-         <boxGeometry args={[0.8, 0.5, 0.5]} />
-         <meshStandardMaterial color="#333" />
+      
+      {/* HỆ THỐNG TREO (Suspension System) */}
+      {/* Thanh kết nối chính */}
+      <mesh position={[0, 0.1, 0]}>
+         <boxGeometry args={[0.4, 0.8, 1.5]} />
+         <meshStandardMaterial color="#444" />
       </mesh>
+      {/* Bánh xe/Con lăn ôm vào đường ray (tượng trưng) */}
+      <group position={[0, 0.5, 0]}>
+          <mesh position={[0.2, 0, 0.5]} rotation={[0,0,Math.PI/2]}>
+              <cylinderGeometry args={[0.15, 0.15, 0.1]} /><meshStandardMaterial color="#222"/>
+          </mesh>
+           <mesh position={[-0.2, 0, 0.5]} rotation={[0,0,Math.PI/2]}>
+              <cylinderGeometry args={[0.15, 0.15, 0.1]} /><meshStandardMaterial color="#222"/>
+          </mesh>
+           <mesh position={[0.2, 0, -0.5]} rotation={[0,0,Math.PI/2]}>
+              <cylinderGeometry args={[0.15, 0.15, 0.1]} /><meshStandardMaterial color="#222"/>
+          </mesh>
+           <mesh position={[-0.2, 0, -0.5]} rotation={[0,0,Math.PI/2]}>
+              <cylinderGeometry args={[0.15, 0.15, 0.1]} /><meshStandardMaterial color="#222"/>
+          </mesh>
+      </group>
     </group>
   );
 };
 
+// --- MÔI TRƯỜNG ---
+const EnvironmentScenery = () => (
+    <>
+        <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, 0, 0]}>
+          <planeGeometry args={[500, 500]} />
+          <meshStandardMaterial color="#3A5A40" /> // Màu cỏ
+        </mesh>
+         {/* Vài cái cây đơn giản ở xa */}
+        {[...Array(20)].map((_, i) => (
+            <mesh key={i} position={[(Math.random()-0.5)*200, 5, (Math.random()-0.5)*200]}>
+                <coneGeometry args={[3, 10, 8]} />
+                <meshStandardMaterial color="#2D4F30" />
+            </mesh>
+        ))}
+    </>
+)
+
+
 // --- MAIN ---
 export default function SkywaySimulation() {
-  const { speed, isMoving, ambientIntensity, cockpitView } = useControls("Điều khiển Skyway", {
-    speed: { value: 8, min: 0, max: 20, label: "Tốc độ" },
-    isMoving: { value: true, label: "Chạy tàu" },
-    cockpitView: { value: false, label: "Góc nhìn Buồng lái" },
-    ambientIntensity: { value: 0.5, min: 0, max: 1, label: "Độ sáng" },
+  const { speed, isMoving, cockpitView, autoRotate, lookX, lookY } = useControls("Skyway Controller", {
+    speed: { value: 10, min: 0, max: 30, label: "🚀 Tốc độ" },
+    isMoving: { value: true, label: "▶ Chạy tàu" },
+    cockpitView: { value: false, label: "🎥 Vào Buồng Lái" },
+    lookX: { value: 0, min: -1, max: 1, label: "👀 Quay Trái/Phải" },
+    lookY: { value: 0, min: -0.5, max: 0.5, label: "👀 Nhìn Lên/Xuống" },
+    autoRotate: { value: false, label: "🔄 Tự động xoay cảnh" },
   });
 
   return (
     <div className="w-full h-screen bg-black">
       <Leva collapsed={false} />
+      {/* Dùng ảnh môi trường (HDR) cho ánh sáng và nền trời đẹp hơn */}
+      <Canvas shadows camera={{ position: [30, 20, 40], fov: 50 }}>
+        <Environment preset="park" background blur={0.5} /> {/* Ánh sáng công viên tự nhiên */}
+        <directionalLight position={[50, 50, 25]} intensity={2} castShadow />
+        <ambientLight intensity={0.3} />
 
-      <Canvas shadows camera={{ position: [30, 30, 60], fov: 50 }}>
-        <color attach="background" args={['#111']} />
-        
-        <ambientLight intensity={ambientIntensity} />
-        <directionalLight position={[50, 50, 25]} intensity={1.5} castShadow />
-
-        <Sky sunPosition={[7, 5, 1]} turbidity={8} rayleigh={6} />
-        <Stars count={3000} factor={4} />
-        
-        {/* Sàn đất */}
-        <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, -0.1, 0]}>
-          <planeGeometry args={[500, 500]} />
-          <meshStandardMaterial color="#1a2a1a" />
-        </mesh>
-
-        <Rail />
+        <EnvironmentScenery />
+        <FullTrack />
         <Pillars />
-        <Buildings />
-        <Station />
-        <Upod speed={speed} isMoving={isMoving} cockpitView={cockpitView} />
+        
+        <HangingUpod 
+          speed={speed} 
+          isMoving={isMoving} 
+          cockpitView={cockpitView} 
+          lookX={lookX} 
+          lookY={lookY} 
+        />
 
-        {/* Ẩn OrbitControls khi đang ngồi trong buồng lái để không bị conflict chuột */}
-        {!cockpitView && <OrbitControls maxPolarAngle={Math.PI / 2.1} />}
+        {!cockpitView && <OrbitControls autoRotate={autoRotate} autoRotateSpeed={1} maxPolarAngle={Math.PI / 2.1} />}
       </Canvas>
     </div>
   );
